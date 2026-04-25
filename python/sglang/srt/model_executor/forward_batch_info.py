@@ -374,6 +374,11 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     token_to_kv_pool: KVCache = None
     attn_backend: AttentionBackend = None
 
+    # RelayKV prototype metadata.
+    # v0 only carries static three-tier policy info into attention metadata.
+    # Actual KV index selection is added later.
+    relaykv_debug: Optional[dict] = None
+
     # For DP attention
     original_global_num_tokens_cpu: Optional[List[int]] = None
     global_num_tokens_cpu: Optional[List[int]] = None

@@ -2817,6 +2817,26 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 # Prepare model-specific attention metadata before planning,
                 # e.g. Moss-VL's prefill cross-attention custom mask.
                 self.model.prepare_forward_batch(forward_batch)
+
+            # RelayKV v0: attach static three-tier metadata to ForwardBatch.
+            # This does not change attention behavior yet.
+            if forward_batch.forward_mode.is_decode():
+                forward_batch.relaykv_debug = {
+                    "mode": "static_three_tier_v0",
+                    "block_size": 256,
+                    "recent_window": 256,
+                    "anchor_blocks": 1,
+                    "retrieval_blocks": [12, 13, 14],
+                }
+
+                if not hasattr(self, "_relaykv_logged_backend"):
+                    logger.info(
+                        "RelayKV v0 forward_decode: attn_backend=%s, relaykv_debug=%s",
+                        type(self.attn_backend).__name__,
+                        forward_batch.relaykv_debug,
+                    )
+                    self._relaykv_logged_backend = True
+
             if self.server_args.enable_pdmux:
                 self.decode_attn_backend.init_forward_metadata(forward_batch)
                 forward_batch.attn_backend = self.decode_attn_backend
