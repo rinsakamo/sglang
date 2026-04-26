@@ -120,6 +120,18 @@ def recommend_blocks_for_table_item(
         "recommended_blocks": sorted(blocks),
     }
 
+
+def format_blocks_csv(blocks: List[int]) -> str:
+    return ",".join(str(x) for x in blocks)
+
+
+def make_relaykv_env_exports(blocks: List[int]) -> List[str]:
+    blocks_csv = format_blocks_csv(blocks)
+    return [
+        "export RELAYKV_V0_APPLY=1",
+        f"export RELAYKV_V0_RETRIEVAL_BLOCKS={blocks_csv}",
+    ]
+
 def run_request(
     url: str,
     case: str,
@@ -269,6 +281,8 @@ def main() -> None:
     rec_p.add_argument("--model", default=DEFAULT_MODEL)
     rec_p.add_argument("--block-size", type=int, default=DEFAULT_BLOCK_SIZE)
     rec_p.add_argument("--radius", type=int, default=1)
+    rec_p.add_argument("--print-env", action="store_true")
+    rec_p.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
 
@@ -302,7 +316,24 @@ def main() -> None:
             radius=args.radius,
         )
 
-        blocks_csv = ",".join(str(x) for x in info["recommended_blocks"])
+        blocks_csv = format_blocks_csv(info["recommended_blocks"])
+        env_exports = make_relaykv_env_exports(info["recommended_blocks"])
+
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "recommended_blocks": info["recommended_blocks"],
+                        "relaykv_v0_apply": 1,
+                        "relaykv_v0_retrieval_blocks": blocks_csv,
+                        "env_exports": env_exports,
+                        **info,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
 
         print(f"case: {args.case}")
         print(f"model: {args.model}")
@@ -314,6 +345,11 @@ def main() -> None:
         print()
         print("export command:")
         print(f"export RELAYKV_V0_RETRIEVAL_BLOCKS={blocks_csv}")
+
+        if args.print_env:
+            print()
+            for line in env_exports:
+                print(line)
 
 
 if __name__ == "__main__":
