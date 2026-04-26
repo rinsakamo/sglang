@@ -182,6 +182,14 @@ def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_json_file(path: Path) -> Dict[str, Any]:
+    return load_json(path)
+
+
+def parse_item_ids(text: str) -> List[int]:
+    return [int(part) for part in text.split(",") if part]
+
+
 def first_diff_index(a: List[int], b: List[int]) -> int | None:
     n = min(len(a), len(b))
     for i in range(n):
@@ -197,23 +205,110 @@ def extract_first_code(text: str | None) -> str | None:
     m = re.search(r"KJQ-\d{4}", text)
     return m.group(0) if m else None
 
+
+def summarize_off_on_pair(
+    off: Dict[str, Any],
+    on: Dict[str, Any],
+    item_id: int | None = None,
+    path: str | None = None,
+    recommended_blocks: List[int] | None = None,
+    error: str | None = None,
+) -> Dict[str, Any]:
+    off_text = off.get("text")
+    on_text = on.get("text")
+    off_ids = off.get("output_ids") or []
+    on_ids = on.get("output_ids") or []
+    off_code = extract_first_code(off_text)
+    on_code = extract_first_code(on_text)
+    same_output_ids = off_ids == on_ids
+
+    if item_id is None:
+        item_id = (off.get("_relaykv_compare_meta") or {}).get("item_id")
+    if item_id is None:
+        item_id = (on.get("_relaykv_compare_meta") or {}).get("item_id")
+
+    return {
+        "path": path,
+        "item_id": item_id,
+        "recommended_blocks": recommended_blocks,
+        "same_output_ids": same_output_ids,
+        "same_first_code": off_code == on_code,
+        "off_first_code": off_code,
+        "on_first_code": on_code,
+        "first_diff_index": first_diff_index(off_ids, on_ids),
+        "off_num_tokens": len(off_ids),
+        "on_num_tokens": len(on_ids),
+        "error": error,
+    }
+
+
+def summarize_compare_result(data: Dict[str, Any], path: Path) -> Dict[str, Any]:
+    meta = data.get("_relaykv_compare_meta") or {}
+    item_id = data.get("item_id")
+    if item_id is None:
+        item_id = meta.get("item_id")
+
+    recommended_blocks = data.get("recommended_blocks")
+    if recommended_blocks is None:
+        recommended_blocks = meta.get("recommended_blocks")
+
+    return {
+        "path": str(path),
+        "item_id": item_id,
+        "recommended_blocks": recommended_blocks,
+        "same_output_ids": data.get("same_output_ids"),
+        "same_first_code": data.get("same_first_code"),
+        "off_first_code": data.get("off_first_code"),
+        "on_first_code": data.get("on_first_code"),
+        "first_diff_index": data.get("first_diff_index"),
+        "off_num_tokens": data.get("off_num_tokens"),
+        "on_num_tokens": data.get("on_num_tokens"),
+        "error": data.get("error"),
+    }
+
+
+def format_report_markdown(items: List[Dict[str, Any]]) -> str:
+    headers = [
+        "path",
+        "item_id",
+        "recommended_blocks",
+        "same_output_ids",
+        "same_first_code",
+        "off_first_code",
+        "on_first_code",
+        "first_diff_index",
+        "off_num_tokens",
+        "on_num_tokens",
+        "error",
+    ]
+
+    def fmt(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return ",".join(str(x) for x in value)
+        return str(value)
+
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+
+    for item in items:
+        row = [fmt(item.get(header)).replace("|", "\\|") for header in headers]
+        lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(lines)
+
 def compare_outputs(off_path: Path, on_path: Path) -> None:
     off = load_json(off_path)
     on = load_json(on_path)
-
+    summary = summarize_off_on_pair(off, on)
     off_text = off.get("text")
     on_text = on.get("text")
-
     off_ids = off.get("output_ids") or []
     on_ids = on.get("output_ids") or []
-
     same_text = off_text == on_text
-    same_output_ids = off_ids == on_ids
-    diff_idx = first_diff_index(off_ids, on_ids)
-
-    off_code = extract_first_code(off_text)
-    on_code = extract_first_code(on_text)
-    same_first_code = off_code == on_code
 
     print("=== OFF text ===")
     print(off_text)
@@ -223,19 +318,19 @@ def compare_outputs(off_path: Path, on_path: Path) -> None:
     print()
     print("=== compare ===")
     print(f"same_text: {same_text}")
-    print(f"same_output_ids: {same_output_ids}")
-    print(f"off_first_code: {off_code}")
-    print(f"on_first_code: {on_code}")
-    print(f"same_first_code: {same_first_code}")
-    print(f"off_num_tokens: {len(off_ids)}")
-    print(f"on_num_tokens: {len(on_ids)}")
-    print(f"first_diff_index: {diff_idx}")
+    print(f"same_output_ids: {summary['same_output_ids']}")
+    print(f"off_first_code: {summary['off_first_code']}")
+    print(f"on_first_code: {summary['on_first_code']}")
+    print(f"same_first_code: {summary['same_first_code']}")
+    print(f"off_num_tokens: {summary['off_num_tokens']}")
+    print(f"on_num_tokens: {summary['on_num_tokens']}")
+    print(f"first_diff_index: {summary['first_diff_index']}")
 
-    if diff_idx is not None:
+    if summary["first_diff_index"] is not None:
         print()
         print("=== diff window ===")
-        start = max(0, diff_idx - 5)
-        end = diff_idx + 10
+        start = max(0, summary["first_diff_index"] - 5)
+        end = summary["first_diff_index"] + 10
         print("OFF ids:", off_ids[start:end])
         print("ON  ids:", on_ids[start:end])
 
@@ -283,6 +378,14 @@ def main() -> None:
     rec_p.add_argument("--radius", type=int, default=1)
     rec_p.add_argument("--print-env", action="store_true")
     rec_p.add_argument("--json", action="store_true")
+
+    report_p = sub.add_parser("report")
+    report_p.add_argument("--inputs", nargs="+", default=None)
+    report_p.add_argument("--case", default=None)
+    report_p.add_argument("--out-dir", default=None)
+    report_p.add_argument("--item-ids", default=None)
+    report_p.add_argument("--out-json", default=None)
+    report_p.add_argument("--out-md", default=None)
 
     args = parser.parse_args()
 
@@ -350,6 +453,67 @@ def main() -> None:
             print()
             for line in env_exports:
                 print(line)
+
+    elif args.cmd == "report":
+        items = []
+        if args.inputs is not None:
+            for input_path in args.inputs:
+                path = Path(input_path)
+                data = load_json_file(path)
+                items.append(summarize_compare_result(data, path))
+
+        if args.case is not None and args.out_dir is not None and args.item_ids is not None:
+            out_dir = Path(args.out_dir)
+            for item_id in parse_item_ids(args.item_ids):
+                suffix = f"_{item_id:04d}"
+                off_path = out_dir / f"{args.case}{suffix}_off.json"
+                on_path = out_dir / f"{args.case}{suffix}_on.json"
+                try:
+                    off = load_json_file(off_path)
+                    on = load_json_file(on_path)
+                    items.append(
+                        summarize_off_on_pair(
+                            off,
+                            on,
+                            item_id=item_id,
+                            path=f"{off_path},{on_path}",
+                        )
+                    )
+                except FileNotFoundError as exc:
+                    items.append(
+                        {
+                            "path": f"{off_path},{on_path}",
+                            "item_id": item_id,
+                            "recommended_blocks": None,
+                            "same_output_ids": None,
+                            "same_first_code": None,
+                            "off_first_code": None,
+                            "on_first_code": None,
+                            "first_diff_index": None,
+                            "off_num_tokens": None,
+                            "on_num_tokens": None,
+                            "error": str(exc),
+                        }
+                    )
+
+        if not items:
+            raise ValueError("report requires --inputs or (--case, --out-dir, and --item-ids)")
+
+        markdown = format_report_markdown(items)
+        print(markdown)
+
+        if args.out_json is not None:
+            out_json_path = Path(args.out_json)
+            out_json_path.parent.mkdir(parents=True, exist_ok=True)
+            out_json_path.write_text(
+                json.dumps({"items": items}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        if args.out_md is not None:
+            out_md_path = Path(args.out_md)
+            out_md_path.parent.mkdir(parents=True, exist_ok=True)
+            out_md_path.write_text(markdown + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
