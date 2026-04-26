@@ -25,6 +25,10 @@ from sglang.srt.utils import (
     next_power_of_2,
 )
 
+# RelayKV prototype switch.
+# v0 is intentionally local-only: single request / decode phase / Triton backend.
+RELAYKV_V0_APPLY = False
+
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
@@ -524,6 +528,37 @@ class TritonAttnBackend(AttentionBackend):
                     kv_indices,
                     self.req_to_token.stride(0),
                 )
+
+                relaykv_apply_ok = (
+                    RELAYKV_V0_APPLY
+                    and relaykv_debug is not None
+                    and bs == 1
+                    and relaykv_selected_kv_indices is not None
+                    and relaykv_selected_kv_indices.numel() > 0
+                    and relaykv_selected_kv_indices.numel() < kv_indices.numel()
+                )
+
+                if relaykv_apply_ok:
+                    full_kv_len = int(kv_indices.numel())
+                    selected_kv_len = int(relaykv_selected_kv_indices.numel())
+
+                    kv_indices = relaykv_selected_kv_indices.to(torch.int64)
+
+                    relaykv_kv_indptr = torch.empty(
+                        2,
+                        dtype=kv_indptr.dtype,
+                        device=kv_indptr.device,
+                    )
+                    relaykv_kv_indptr[0] = 0
+                    relaykv_kv_indptr[1] = selected_kv_len
+                    kv_indptr = relaykv_kv_indptr
+
+                    logger.info(
+                        "RelayKV v0 APPLY selected kv indices: full_len=%s, selected_len=%s, kv_indptr=%s",
+                        full_kv_len,
+                        selected_kv_len,
+                        kv_indptr.detach().cpu().tolist(),
+                    )
 
                 relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
                 if relaykv_debug is not None:
