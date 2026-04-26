@@ -559,6 +559,12 @@ class TritonAttnBackend(AttentionBackend):
                         selected_kv_len,
                         kv_indptr.detach().cpu().tolist(),
                     )
+                    logger.info(
+                        "RelayKV v0 APPLY metadata check: seq_lens=%s, kv_indptr=%s, kv_indices_numel=%s",
+                        forward_batch.seq_lens.detach().cpu().tolist(),
+                        kv_indptr.detach().cpu().tolist(),
+                        int(kv_indices.numel()),
+                    )
 
                 relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
                 if relaykv_debug is not None:
@@ -647,7 +653,45 @@ class TritonAttnBackend(AttentionBackend):
                 device=self.device,
             )
             num_kv_splits = torch.empty((bs,), dtype=torch.int32, device=self.device)
-            self.get_num_kv_splits(num_kv_splits, forward_batch.seq_lens)
+            # self.get_num_kv_splits(num_kv_splits, forward_batch.seq_lens)
+            relaykv_seq_lens_for_splits = None
+            if (
+                RELAYKV_V0_APPLY
+                and getattr(forward_batch, "relaykv_debug", None) is not None
+                and 'relaykv_selected_kv_indices' in locals()
+                and relaykv_selected_kv_indices is not None
+            ):
+                relaykv_seq_lens_for_splits = torch.full_like(
+                    forward_batch.seq_lens,
+                    int(relaykv_selected_kv_indices.numel()),
+                )
+
+            seq_lens_for_splits = (
+                relaykv_seq_lens_for_splits
+                if relaykv_seq_lens_for_splits is not None
+                else forward_batch.seq_lens
+            )
+
+            self.get_num_kv_splits(
+                num_kv_splits,
+                seq_lens_for_splits,
+            )
+
+            if relaykv_seq_lens_for_splits is not None:
+                logger.info(
+                    "RelayKV v0 split seq_lens override: original=%s, override=%s",
+                    forward_batch.seq_lens.detach().cpu().tolist(),
+                    relaykv_seq_lens_for_splits.detach().cpu().tolist(),
+                )
+
+            if getattr(forward_batch, "relaykv_debug", None) is not None and RELAYKV_V0_APPLY:
+                logger.info(
+                    "RelayKV v0 num_kv_splits check: original_seq_lens=%s, used_seq_lens=%s, num_kv_splits_shape=%s, sample=%s",
+                    forward_batch.seq_lens.detach().cpu().tolist(),
+                    seq_lens_for_splits.detach().cpu().tolist(),
+                    tuple(num_kv_splits.shape),
+                    num_kv_splits[: min(8, num_kv_splits.numel())].detach().cpu().tolist(),
+                )
 
             qo_indptr = None
             custom_mask = None

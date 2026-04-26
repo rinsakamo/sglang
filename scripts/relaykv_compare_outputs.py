@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import argparse
 import json
 from pathlib import Path
@@ -28,6 +29,46 @@ def build_prompt(case: str) -> str:
             chunks.append(f"Filler line {i}: RelayKV test sentence.")
         text = "\n".join(chunks)
         return text + "\n\nWhat is the secret code? Answer briefly."
+
+    if case == "code_probe_unselected":
+        chunks = []
+        for i in range(1200):
+            # Pseudo-random code that is hard to infer from item number.
+            code = f"KJQ-{(i * 7919 + 482) % 10000:04d}"
+            chunks.append(f"Item {i}: secret code = {code}.")
+        text = "\n".join(chunks)
+        return text + "\n\nWhat is the secret code in Item 1000? Answer only the code."
+
+    if case == "code_probe_retrieval":
+        chunks = []
+        for i in range(1200):
+            code = f"KJQ-{(i * 7919 + 482) % 10000:04d}"
+            chunks.append(f"Item {i}: secret code = {code}.")
+        text = "\n".join(chunks)
+        # Around Item 210, it is expected that token positions are likely to fall into the retrieval blocks [3072,3840)
+        return text + "\n\nWhat is the secret code in Item 210? Answer only the code."
+
+    if case == "code_probe_retrieval_small":
+        chunks = []
+        for i in range(260):
+            code = f"KJQ-{(i * 7919 + 482) % 10000:04d}"
+            chunks.append(f"Item {i}: secret code = {code}.")
+        text = "\n".join(chunks)
+        return text + "\n\nWhat is the secret code in Item 210? Answer only the code."
+
+    if case == "code_probe_table_small":
+        chunks = []
+        for i in range(260):
+            code = f"KJQ-{(i * 7919 + 482) % 10000:04d}"
+            chunks.append(f"ITEM_ID={i:04d} | SECRET_CODE={code}")
+        text = "\n".join(chunks)
+        return (
+            text
+            + "\n\nTask: Look up the row with ITEM_ID=0210."
+            + "\nReturn exactly one token-like code in the format KJQ-0000."
+            + "\nDo not explain."
+            + "\nAnswer:"
+        )
 
     raise ValueError(f"Unknown case: {case}")
 
@@ -140,7 +181,15 @@ def main() -> None:
     run_p.add_argument(
         "--case",
         default="repeated_summary",
-        choices=["repeated_summary", "number_probe", "early_anchor_probe"],
+        choices=[
+            "repeated_summary",
+            "number_probe",
+            "early_anchor_probe",
+            "code_probe_unselected",
+            "code_probe_retrieval",
+            "code_probe_retrieval_small",
+            "code_probe_table_small",
+        ],
     )
     run_p.add_argument("--url", default=DEFAULT_URL)
     run_p.add_argument("--max-new-tokens", type=int, default=32)
