@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
+import logging
+logger = logging.getLogger(__name__)
+
 import torch
 import triton
 import triton.language as tl
@@ -252,6 +255,15 @@ class TritonAttnBackend(AttentionBackend):
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init auxiliary variables for triton attention backend."""
+
+        relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
+        if relaykv_debug is not None and not getattr(self, "_relaykv_debug_logged", False):
+            logger.info(
+                "RelayKV v0 init_forward_metadata: backend=%s, relaykv_debug=%s",
+                type(self).__name__,
+                relaykv_debug,
+            )
+            self._relaykv_debug_logged = True
 
         bs = forward_batch.batch_size
         kv_indptr = self.kv_indptr
