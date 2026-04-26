@@ -253,6 +253,62 @@ class TritonAttnBackend(AttentionBackend):
             MAX_NUM_SEQ=SCHEDULE_SEQ,
         )
 
+
+    def _relaykv_resolve_static_spans(self, relaykv_debug, seq_len):
+        """Resolve RelayKV v0 static three-tier metadata into token position spans.
+
+        v0 debug only. This does not change KV selection or attention behavior.
+        """
+        if relaykv_debug is None or seq_len is None:
+            return None
+
+        block_size = int(relaykv_debug.get("block_size", 256))
+        recent_window = int(relaykv_debug.get("recent_window", 256))
+        anchor_blocks = int(relaykv_debug.get("anchor_blocks", 0))
+        retrieval_blocks = relaykv_debug.get("retrieval_blocks", [])
+
+        spans = []
+
+        for block_id in range(anchor_blocks):
+            start = block_id * block_size
+            end = min((block_id + 1) * block_size, seq_len)
+            if start < end:
+                spans.append(
+                    {
+                        "tier": "anchor",
+                        "block_id": block_id,
+                        "start": start,
+                        "end": end,
+                    }
+                )
+
+        for block_id in retrieval_blocks:
+            block_id = int(block_id)
+            start = block_id * block_size
+            end = min((block_id + 1) * block_size, seq_len)
+            if start < end:
+                spans.append(
+                    {
+                        "tier": "retrieval",
+                        "block_id": block_id,
+                        "start": start,
+                        "end": end,
+                    }
+                )
+
+        recent_start = max(0, seq_len - recent_window)
+        if recent_start < seq_len:
+            spans.append(
+                {
+                    "tier": "recent",
+                    "block_id": None,
+                    "start": recent_start,
+                    "end": seq_len,
+                }
+            )
+
+        return spans
+
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init auxiliary variables for triton attention backend."""
 
@@ -264,6 +320,41 @@ class TritonAttnBackend(AttentionBackend):
                 relaykv_debug,
             )
             self._relaykv_debug_logged = True
+
+        relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
+        if relaykv_debug is not None:
+            seq_lens = getattr(forward_batch, "seq_lens", None)
+            if seq_lens is not None:
+                if hasattr(seq_lens, "detach"):
+                    seq_lens_list = seq_lens.detach().cpu().tolist()
+                else:
+                    seq_lens_list = seq_lens
+                relaykv_seq_len = int(max(seq_lens_list)) if len(seq_lens_list) > 0 else None
+            else:
+                relaykv_seq_len = None
+
+            relaykv_spans = self._relaykv_resolve_static_spans(
+                relaykv_debug,
+                relaykv_seq_len,
+            )
+
+            should_log = (
+            relaykv_seq_len is not None
+            and (
+                relaykv_seq_len <= 16
+                or relaykv_seq_len % 256 == 0
+                or not getattr(self, "_relaykv_long_span_logged", False)
+            )
+        )
+
+        if should_log:
+            logger.info(
+                "RelayKV v0 resolved spans: seq_len=%s, spans=%s",
+                relaykv_seq_len,
+                relaykv_spans,
+            )
+            if relaykv_seq_len is not None and relaykv_seq_len > 1024:
+                self._relaykv_long_span_logged = True
 
         bs = forward_batch.batch_size
         kv_indptr = self.kv_indptr
