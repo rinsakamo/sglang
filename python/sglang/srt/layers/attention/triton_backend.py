@@ -309,19 +309,63 @@ class TritonAttnBackend(AttentionBackend):
 
         return spans
 
+    def _relaykv_resolve_kv_index_summaries(self, forward_batch, spans):
+        """Resolve RelayKV token spans into physical KV index summaries.
+
+        v0 debug only. This does not change KV selection or attention behavior.
+        """
+        if not spans:
+            return None
+
+        req_pool_indices = getattr(forward_batch, "req_pool_indices", None)
+        req_to_token_pool = getattr(forward_batch, "req_to_token_pool", None)
+
+        if req_pool_indices is None or req_to_token_pool is None:
+            return None
+
+        req_to_token = getattr(req_to_token_pool, "req_to_token", None)
+        if req_to_token is None:
+            return None
+
+        # v0: single request only.
+        req_pool_idx = int(req_pool_indices[0].item())
+
+        summaries = []
+        for span in spans:
+            start = int(span["start"])
+            end = int(span["end"])
+            if start >= end:
+                continue
+
+            kv_indices = req_to_token[req_pool_idx, start:end]
+
+            # Keep logs small: only shape and edge values.
+            if kv_indices.numel() == 0:
+                first_idx = None
+                last_idx = None
+            else:
+                first_idx = int(kv_indices[0].item())
+                last_idx = int(kv_indices[-1].item())
+
+            summaries.append(
+                {
+                    "tier": span["tier"],
+                    "block_id": span["block_id"],
+                    "start": start,
+                    "end": end,
+                    "num_tokens": int(kv_indices.numel()),
+                    "first_kv_idx": first_idx,
+                    "last_kv_idx": last_idx,
+                }
+            )
+
+        return summaries
+
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init auxiliary variables for triton attention backend."""
 
         relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
-        if relaykv_debug is not None and not getattr(self, "_relaykv_debug_logged", False):
-            logger.info(
-                "RelayKV v0 init_forward_metadata: backend=%s, relaykv_debug=%s",
-                type(self).__name__,
-                relaykv_debug,
-            )
-            self._relaykv_debug_logged = True
 
-        relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
         if relaykv_debug is not None:
             seq_lens = getattr(forward_batch, "seq_lens", None)
             if seq_lens is not None:
@@ -338,23 +382,55 @@ class TritonAttnBackend(AttentionBackend):
                 relaykv_seq_len,
             )
 
-            should_log = (
-            relaykv_seq_len is not None
-            and (
-                relaykv_seq_len <= 16
-                or relaykv_seq_len % 256 == 0
-                or not getattr(self, "_relaykv_long_span_logged", False)
-            )
-        )
-
-        if should_log:
-            logger.info(
-                "RelayKV v0 resolved spans: seq_len=%s, spans=%s",
-                relaykv_seq_len,
+            relaykv_kv_index_summaries = self._relaykv_resolve_kv_index_summaries(
+                forward_batch,
                 relaykv_spans,
             )
-            if relaykv_seq_len is not None and relaykv_seq_len > 1024:
-                self._relaykv_long_span_logged = True
+
+            should_log = (
+                relaykv_seq_len is not None
+                and (
+                    relaykv_seq_len <= 16
+                    or relaykv_seq_len % 256 == 0
+                    or not getattr(self, "_relaykv_long_span_logged", False)
+                )
+            )
+
+            if should_log:
+                logger.info(
+                    "RelayKV v0 resolved spans: seq_len=%s, spans=%s",
+                    relaykv_seq_len,
+                    relaykv_spans,
+                )
+                if relaykv_seq_len is not None and relaykv_seq_len > 1024:
+                    self._relaykv_long_span_logged = True
+
+            if should_log:
+                logger.info(
+                    "RelayKV v0 resolved spans: seq_len=%s, spans=%s",
+                    relaykv_seq_len,
+                    relaykv_spans,
+                )
+                logger.info(
+                    "RelayKV v0 kv index summaries: %s",
+                    relaykv_kv_index_summaries,
+                )
+                if relaykv_seq_len is not None and relaykv_seq_len > 1024:
+                    self._relaykv_long_span_logged = True
+
+
+            req_pool_indices = getattr(forward_batch, "req_pool_indices", None)
+            seq_lens = getattr(forward_batch, "seq_lens", None)
+            req_to_token_pool = getattr(forward_batch, "req_to_token_pool", None)
+
+            if not getattr(self, "_relaykv_pool_logged", False):
+                logger.info(
+                    "RelayKV v0 pool summary: req_pool_indices=%s, seq_lens=%s, req_to_token_pool=%s",
+                    self._relaykv_tensor_summary(req_pool_indices),
+                    self._relaykv_tensor_summary(seq_lens),
+                    self._relaykv_pool_summary(req_to_token_pool),
+                )
+                self._relaykv_pool_logged = True
 
         bs = forward_batch.batch_size
         kv_indptr = self.kv_indptr
@@ -567,6 +643,47 @@ class TritonAttnBackend(AttentionBackend):
             window_kv_offsets,
             swa_attn_logits=swa_attn_logits,
         )
+
+    def _relaykv_tensor_summary(self, x):
+        if x is None:
+            return None
+        if hasattr(x, "shape"):
+            return {
+                "type": type(x).__name__,
+                "shape": tuple(x.shape),
+                "dtype": str(getattr(x, "dtype", None)),
+                "device": str(getattr(x, "device", None)),
+            }
+        return {
+            "type": type(x).__name__,
+            "repr": repr(x)[:200],
+        }
+
+    def _relaykv_pool_summary(self, pool):
+        if pool is None:
+            return None
+
+        summary = {
+            "type": type(pool).__name__,
+        }
+
+        for name in [
+            "req_to_token",
+            "req_to_token_pool",
+            "pool",
+            "data",
+            "device",
+            "size",
+        ]:
+            if hasattr(pool, name):
+                value = getattr(pool, name)
+                if hasattr(value, "shape"):
+                    summary[name] = self._relaykv_tensor_summary(value)
+                else:
+                    summary[name] = repr(value)[:200]
+
+        return summary
+
 
     def init_cuda_graph_state(
         self,
