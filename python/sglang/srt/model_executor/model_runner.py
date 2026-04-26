@@ -2826,7 +2826,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     "block_size": 256,
                     "recent_window": 256,
                     "anchor_blocks": 1,
-                    "retrieval_blocks": [8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                    "retrieval_blocks": [12, 13, 14, 15, 16],
                 }
 
                 if not hasattr(self, "_relaykv_logged_backend"):
