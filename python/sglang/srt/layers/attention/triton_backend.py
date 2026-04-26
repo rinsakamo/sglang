@@ -361,6 +361,74 @@ class TritonAttnBackend(AttentionBackend):
 
         return summaries
 
+    def _relaykv_build_selected_kv_indices(self, forward_batch, spans):
+        """Build a flat selected physical KV index tensor from RelayKV spans.
+
+        v0 debug only. This does not change KV selection or attention behavior.
+        """
+        if not spans:
+            return None
+
+        import torch
+
+        req_pool_indices = getattr(forward_batch, "req_pool_indices", None)
+        req_to_token_pool = getattr(forward_batch, "req_to_token_pool", None)
+
+        if req_pool_indices is None or req_to_token_pool is None:
+            return None
+
+        req_to_token = getattr(req_to_token_pool, "req_to_token", None)
+        if req_to_token is None:
+            return None
+
+        # v0: single request only.
+        req_pool_idx = int(req_pool_indices[0].item())
+
+        pieces = []
+        for span in spans:
+            start = int(span["start"])
+            end = int(span["end"])
+            if start >= end:
+                continue
+
+            kv_indices = req_to_token[req_pool_idx, start:end]
+            if kv_indices.numel() > 0:
+                pieces.append(kv_indices)
+
+        if not pieces:
+            return None
+
+        selected = torch.cat(pieces, dim=0)
+
+        # Short prompts can make anchor and recent overlap exactly.
+        # Deduplicate for v0 debug summary. sorted=True keeps the result monotonic.
+        selected = torch.unique(selected, sorted=True)
+
+        return selected
+
+    def _relaykv_selected_kv_indices_summary(self, selected):
+        if selected is None:
+            return None
+
+        if selected.numel() == 0:
+            return {
+                "shape": tuple(selected.shape),
+                "dtype": str(selected.dtype),
+                "device": str(selected.device),
+                "numel": 0,
+                "first_kv_idx": None,
+                "last_kv_idx": None,
+            }
+
+        return {
+            "shape": tuple(selected.shape),
+            "dtype": str(selected.dtype),
+            "device": str(selected.device),
+            "numel": int(selected.numel()),
+            "first_kv_idx": int(selected[0].item()),
+            "last_kv_idx": int(selected[-1].item()),
+        }
+
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init auxiliary variables for triton attention backend."""
 
@@ -381,12 +449,7 @@ class TritonAttnBackend(AttentionBackend):
                 relaykv_debug,
                 relaykv_seq_len,
             )
-
-            relaykv_kv_index_summaries = self._relaykv_resolve_kv_index_summaries(
-                forward_batch,
-                relaykv_spans,
-            )
-
+                        
             should_log = (
                 relaykv_seq_len is not None
                 and (
@@ -396,14 +459,14 @@ class TritonAttnBackend(AttentionBackend):
                 )
             )
 
-            if should_log:
-                logger.info(
-                    "RelayKV v0 resolved spans: seq_len=%s, spans=%s",
-                    relaykv_seq_len,
-                    relaykv_spans,
-                )
-                if relaykv_seq_len is not None and relaykv_seq_len > 1024:
-                    self._relaykv_long_span_logged = True
+            relaykv_kv_index_summaries = self._relaykv_resolve_kv_index_summaries(
+                forward_batch,
+                relaykv_spans,
+            )
+            relaykv_selected_kv_indices = self._relaykv_build_selected_kv_indices(
+                forward_batch,
+                relaykv_spans,
+            )
 
             if should_log:
                 logger.info(
@@ -414,6 +477,10 @@ class TritonAttnBackend(AttentionBackend):
                 logger.info(
                     "RelayKV v0 kv index summaries: %s",
                     relaykv_kv_index_summaries,
+                )
+                logger.info(
+                    "RelayKV v0 selected kv indices: %s",
+                    self._relaykv_selected_kv_indices_summary(relaykv_selected_kv_indices),
                 )
                 if relaykv_seq_len is not None and relaykv_seq_len > 1024:
                     self._relaykv_long_span_logged = True
