@@ -553,6 +553,21 @@ class TritonAttnBackend(AttentionBackend):
                         if full_vs_selected_seq_len > 1024:
                             self._relaykv_full_vs_selected_long_logged = True
 
+                if relaykv_selected_kv_indices is not None:
+                    relaykv_kv_indptr = torch.empty(
+                        2,
+                        dtype=kv_indptr.dtype,
+                        device=kv_indptr.device,
+                    )
+                    relaykv_kv_indptr[0] = 0
+                    relaykv_kv_indptr[1] = relaykv_selected_kv_indices.numel()
+
+                    logger.info(
+                        "RelayKV v0 indptr compare: full=%s, relaykv=%s",
+                        kv_indptr[: bs + 1].detach().cpu().tolist(),
+                        relaykv_kv_indptr.detach().cpu().tolist(),
+                    )
+
                 # Sliding window
                 if (
                     self.sliding_window_size is not None
