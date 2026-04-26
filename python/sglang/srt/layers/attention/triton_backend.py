@@ -524,6 +524,35 @@ class TritonAttnBackend(AttentionBackend):
                     kv_indices,
                     self.req_to_token.stride(0),
                 )
+
+                relaykv_debug = getattr(forward_batch, "relaykv_debug", None)
+                if relaykv_debug is not None:
+                    full_vs_selected_seq_len = int(max(forward_batch.seq_lens.detach().cpu().tolist()))
+                    should_log_full_vs_selected = (
+                        full_vs_selected_seq_len <= 16
+                        or not getattr(self, "_relaykv_full_vs_selected_long_logged", False)
+                    )
+
+                    if should_log_full_vs_selected:
+                        relaykv_spans = self._relaykv_resolve_static_spans(
+                            relaykv_debug,
+                            full_vs_selected_seq_len,
+                        )
+                        relaykv_selected_kv_indices = self._relaykv_build_selected_kv_indices(
+                            forward_batch,
+                            relaykv_spans,
+                        )
+
+                        logger.info(
+                            "RelayKV v0 full vs selected kv indices: seq_len=%s, full=%s, selected=%s",
+                            full_vs_selected_seq_len,
+                            self._relaykv_selected_kv_indices_summary(kv_indices),
+                            self._relaykv_selected_kv_indices_summary(relaykv_selected_kv_indices),
+                        )
+
+                        if full_vs_selected_seq_len > 1024:
+                            self._relaykv_full_vs_selected_long_logged = True
+
                 # Sliding window
                 if (
                     self.sliding_window_size is not None
