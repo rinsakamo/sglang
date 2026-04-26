@@ -2818,6 +2818,16 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 # e.g. Moss-VL's prefill cross-attention custom mask.
                 self.model.prepare_forward_batch(forward_batch)
 
+            relaykv_retrieval_blocks_env = os.environ.get("RELAYKV_V0_RETRIEVAL_BLOCKS")
+            if relaykv_retrieval_blocks_env:
+                relaykv_retrieval_blocks = [
+                    int(x.strip())
+                    for x in relaykv_retrieval_blocks_env.split(",")
+                    if x.strip()
+                ]
+            else:
+                relaykv_retrieval_blocks = [12, 13, 14, 15, 16]
+
             # RelayKV v0: attach static three-tier metadata to ForwardBatch.
             # This does not change attention behavior yet.
             if forward_batch.forward_mode.is_decode():
@@ -2826,7 +2836,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     "block_size": 256,
                     "recent_window": 256,
                     "anchor_blocks": 1,
-                    "retrieval_blocks": [14, 15, 16],
+                    "retrieval_blocks": relaykv_retrieval_blocks,
                 }
 
                 if not hasattr(self, "_relaykv_logged_backend"):

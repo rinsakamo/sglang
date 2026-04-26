@@ -27,7 +27,7 @@ from sglang.srt.utils import (
 
 # RelayKV prototype switch.
 # v0 is intentionally local-only: single request / decode phase / Triton backend.
-RELAYKV_V0_APPLY = False
+RELAYKV_V0_APPLY = get_bool_env_var("RELAYKV_V0_APPLY", "false")
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
