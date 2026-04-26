@@ -468,6 +468,14 @@ def main() -> None:
                 suffix = f"_{item_id:04d}"
                 off_path = out_dir / f"{args.case}{suffix}_off.json"
                 on_path = out_dir / f"{args.case}{suffix}_on.json"
+                recommended_blocks = None
+                recommendation_error = None
+                try:
+                    recommended_blocks = recommend_blocks_for_table_item(
+                        item_id=item_id,
+                    )["recommended_blocks"]
+                except Exception as exc:
+                    recommendation_error = str(exc)
                 try:
                     off = load_json_file(off_path)
                     on = load_json_file(on_path)
@@ -477,6 +485,8 @@ def main() -> None:
                             on,
                             item_id=item_id,
                             path=f"{off_path},{on_path}",
+                            recommended_blocks=recommended_blocks,
+                            error=recommendation_error,
                         )
                     )
                 except FileNotFoundError as exc:
@@ -484,7 +494,7 @@ def main() -> None:
                         {
                             "path": f"{off_path},{on_path}",
                             "item_id": item_id,
-                            "recommended_blocks": None,
+                            "recommended_blocks": recommended_blocks,
                             "same_output_ids": None,
                             "same_first_code": None,
                             "off_first_code": None,
@@ -492,7 +502,7 @@ def main() -> None:
                             "first_diff_index": None,
                             "off_num_tokens": None,
                             "on_num_tokens": None,
-                            "error": str(exc),
+                            "error": str(exc) if str(exc) else recommendation_error,
                         }
                     )
 
