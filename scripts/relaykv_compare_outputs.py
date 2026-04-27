@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -139,6 +140,7 @@ def run_request(
     temperature: float,
     output_path: Path,
     item_id: int | None = None,
+    relaykv_blocks: str | None = None,
 ) -> None:
     prompt = build_prompt(case, item_id=item_id)
 
@@ -165,6 +167,9 @@ def run_request(
         "temperature": temperature,
         "prompt_chars": len(prompt),
         "item_id": item_id,
+        "relaykv_v0_apply": os.environ.get("RELAYKV_V0_APPLY"),
+        "relaykv_blocks_arg": relaykv_blocks,
+        "relaykv_v0_retrieval_blocks": relaykv_blocks or os.environ.get("RELAYKV_V0_RETRIEVAL_BLOCKS"),
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,6 +369,7 @@ def main() -> None:
     run_p.add_argument("--temperature", type=float, default=0.0)
     run_p.add_argument("--out-dir", default="/tmp/relaykv_compare")
     run_p.add_argument("--item-id", type=int, default=None)
+    run_p.add_argument("--relaykv-blocks", default=None)
 
     cmp_p = sub.add_parser("compare")
     cmp_p.add_argument("--case", default="repeated_summary")
@@ -404,6 +410,7 @@ def main() -> None:
             temperature=args.temperature,
             output_path=out_path,
             item_id=args.item_id,
+            relaykv_blocks=args.relaykv_blocks,
         )
 
     elif args.cmd == "compare":
