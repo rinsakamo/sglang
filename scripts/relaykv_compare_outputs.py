@@ -141,6 +141,7 @@ def run_request(
     output_path: Path,
     item_id: int | None = None,
     relaykv_blocks: str | None = None,
+    tag: str | None = None,
 ) -> None:
     prompt = build_prompt(case, item_id=item_id)
 
@@ -170,6 +171,7 @@ def run_request(
         "relaykv_v0_apply": os.environ.get("RELAYKV_V0_APPLY"),
         "relaykv_blocks_arg": relaykv_blocks,
         "relaykv_v0_retrieval_blocks": relaykv_blocks or os.environ.get("RELAYKV_V0_RETRIEVAL_BLOCKS"),
+        "tag": tag,
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,16 +228,21 @@ def summarize_off_on_pair(
     off_code = extract_first_code(off_text)
     on_code = extract_first_code(on_text)
     same_output_ids = off_ids == on_ids
+    on_meta = on.get("_relaykv_compare_meta") or {}
+    actual_relaykv_blocks = on_meta.get("relaykv_v0_retrieval_blocks")
+    if actual_relaykv_blocks is None:
+        actual_relaykv_blocks = on_meta.get("relaykv_blocks_arg")
 
     if item_id is None:
         item_id = (off.get("_relaykv_compare_meta") or {}).get("item_id")
     if item_id is None:
-        item_id = (on.get("_relaykv_compare_meta") or {}).get("item_id")
+        item_id = on_meta.get("item_id")
 
     return {
         "path": path,
         "item_id": item_id,
         "recommended_blocks": recommended_blocks,
+        "actual_relaykv_blocks": actual_relaykv_blocks,
         "same_output_ids": same_output_ids,
         "same_first_code": off_code == on_code,
         "off_first_code": off_code,
@@ -261,6 +268,7 @@ def summarize_compare_result(data: Dict[str, Any], path: Path) -> Dict[str, Any]
         "path": str(path),
         "item_id": item_id,
         "recommended_blocks": recommended_blocks,
+        "actual_relaykv_blocks": data.get("actual_relaykv_blocks"),
         "same_output_ids": data.get("same_output_ids"),
         "same_first_code": data.get("same_first_code"),
         "off_first_code": data.get("off_first_code"),
@@ -277,6 +285,7 @@ def format_report_markdown(items: List[Dict[str, Any]]) -> str:
         "path",
         "item_id",
         "recommended_blocks",
+        "actual_relaykv_blocks",
         "same_output_ids",
         "same_first_code",
         "off_first_code",
@@ -370,6 +379,7 @@ def main() -> None:
     run_p.add_argument("--out-dir", default="/tmp/relaykv_compare")
     run_p.add_argument("--item-id", type=int, default=None)
     run_p.add_argument("--relaykv-blocks", default=None)
+    run_p.add_argument("--tag", default=None)
 
     cmp_p = sub.add_parser("compare")
     cmp_p.add_argument("--case", default="repeated_summary")
@@ -390,6 +400,7 @@ def main() -> None:
     report_p.add_argument("--case", default=None)
     report_p.add_argument("--out-dir", default=None)
     report_p.add_argument("--item-ids", default=None)
+    report_p.add_argument("--tag", default=None)
     report_p.add_argument("--out-json", default=None)
     report_p.add_argument("--out-md", default=None)
 
@@ -402,7 +413,8 @@ def main() -> None:
 
     if args.cmd == "run":
         suffix = f"_{args.item_id:04d}" if args.item_id is not None else ""
-        out_path = Path(args.out_dir) / f"{args.case}{suffix}_{args.label}.json"
+        tag_suffix = f"_{args.tag}" if args.tag is not None else ""
+        out_path = Path(args.out_dir) / f"{args.case}{suffix}_{args.label}{tag_suffix}.json"
         run_request(
             url=args.url,
             case=args.case,
@@ -411,6 +423,7 @@ def main() -> None:
             output_path=out_path,
             item_id=args.item_id,
             relaykv_blocks=args.relaykv_blocks,
+            tag=args.tag,
         )
 
     elif args.cmd == "compare":
@@ -479,7 +492,8 @@ def main() -> None:
             for item_id in parse_item_ids(args.item_ids):
                 suffix = f"_{item_id:04d}"
                 off_path = out_dir / f"{args.case}{suffix}_off.json"
-                on_path = out_dir / f"{args.case}{suffix}_on.json"
+                on_tag_suffix = f"_{args.tag}" if args.tag is not None else ""
+                on_path = out_dir / f"{args.case}{suffix}_on{on_tag_suffix}.json"
                 recommended_blocks = None
                 recommendation_error = None
                 try:
@@ -507,6 +521,7 @@ def main() -> None:
                             "path": f"{off_path},{on_path}",
                             "item_id": item_id,
                             "recommended_blocks": recommended_blocks,
+                            "actual_relaykv_blocks": None,
                             "same_output_ids": None,
                             "same_first_code": None,
                             "off_first_code": None,
