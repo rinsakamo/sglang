@@ -126,6 +126,14 @@ def format_blocks_csv(blocks: List[int]) -> str:
     return ",".join(str(x) for x in blocks)
 
 
+def expand_blocks_with_radius(blocks: List[int], radius: int) -> List[int]:
+    if radius <= 0 or not blocks:
+        return sorted(set(blocks))
+    start = max(0, min(blocks) - radius)
+    end = max(blocks) + radius
+    return list(range(start, end + 1))
+
+
 def make_relaykv_env_exports(blocks: List[int]) -> List[str]:
     blocks_csv = format_blocks_csv(blocks)
     return [
@@ -392,6 +400,7 @@ def main() -> None:
     rec_p.add_argument("--model", default=DEFAULT_MODEL)
     rec_p.add_argument("--block-size", type=int, default=DEFAULT_BLOCK_SIZE)
     rec_p.add_argument("--radius", type=int, default=1)
+    rec_p.add_argument("--neighbor-radius", type=int, default=0)
     rec_p.add_argument("--print-env", action="store_true")
     rec_p.add_argument("--json", action="store_true")
 
@@ -408,6 +417,8 @@ def main() -> None:
     plan_p.add_argument("--case", default="code_probe_table_small")
     plan_p.add_argument("--out-dir", default="/tmp/relaykv_compare")
     plan_p.add_argument("--item-ids", required=True)
+    plan_p.add_argument("--neighbor-radius", type=int, default=0)
+    plan_p.add_argument("--server-command", action="store_true")
 
     args = parser.parse_args()
 
@@ -445,15 +456,19 @@ def main() -> None:
         )
 
         blocks_csv = format_blocks_csv(info["recommended_blocks"])
-        env_exports = make_relaykv_env_exports(info["recommended_blocks"])
+        expanded_blocks = expand_blocks_with_radius(info["recommended_blocks"], args.neighbor_radius)
+        expanded_blocks_csv = format_blocks_csv(expanded_blocks)
+        env_exports = make_relaykv_env_exports(expanded_blocks)
 
         if args.json:
             print(
                 json.dumps(
                     {
                         "recommended_blocks": info["recommended_blocks"],
+                        "neighbor_radius": args.neighbor_radius,
+                        "expanded_blocks": expanded_blocks,
                         "relaykv_v0_apply": 1,
-                        "relaykv_v0_retrieval_blocks": blocks_csv,
+                        "relaykv_v0_retrieval_blocks": expanded_blocks_csv,
                         "env_exports": env_exports,
                         **info,
                     },
@@ -470,9 +485,11 @@ def main() -> None:
         print(f"token_range: [{info['token_start']}, {info['token_end']})")
         print(f"block_range: [{info['block_start']}, {info['block_end']}]")
         print(f"recommended_blocks: {blocks_csv}")
+        if args.neighbor_radius > 0:
+            print(f"expanded_blocks: {expanded_blocks_csv}")
         print()
         print("export command:")
-        print(f"export RELAYKV_V0_RETRIEVAL_BLOCKS={blocks_csv}")
+        print(f"export RELAYKV_V0_RETRIEVAL_BLOCKS={expanded_blocks_csv}")
 
         if args.print_env:
             print()
@@ -553,18 +570,37 @@ def main() -> None:
             out_md_path.write_text(markdown + "\n", encoding="utf-8")
 
     elif args.cmd == "plan":
-        for item_id in parse_item_ids(args.item_ids):
+        tag = f"r{args.neighbor_radius}" if args.neighbor_radius > 0 else None
+        for item_id_text in [part for part in args.item_ids.split(",") if part]:
+            item_id = int(item_id_text)
             info = recommend_blocks_for_table_item(item_id=item_id)
             blocks_csv = format_blocks_csv(info["recommended_blocks"])
+            expanded_blocks = expand_blocks_with_radius(info["recommended_blocks"], args.neighbor_radius)
+            expanded_blocks_csv = format_blocks_csv(expanded_blocks)
             print(f"# item_id={item_id:04d} recommended_blocks={blocks_csv}")
-            for line in make_relaykv_env_exports(info["recommended_blocks"]):
-                print(line)
+            if args.neighbor_radius > 0:
+                print(f"# item_id={item_id:04d} expanded_blocks={expanded_blocks_csv}")
+            if args.server_command:
+                print(f"./scripts/start_relaykv_server.sh on {expanded_blocks_csv}")
+            else:
+                for line in make_relaykv_env_exports(expanded_blocks):
+                    print(line)
+            run_cmd = (
+                "python scripts/relaykv_compare_outputs.py run"
+                f" --label on --case {args.case} --out-dir {args.out_dir}"
+                f" --item-id {item_id_text} --relaykv-blocks {expanded_blocks_csv}"
+            )
+            if tag is not None:
+                run_cmd += f" --tag {tag}"
+            print(run_cmd)
             print()
 
         print("python scripts/relaykv_compare_outputs.py report \\")
         print(f"  --case {args.case} \\")
         print(f"  --out-dir {args.out_dir} \\")
-        print(f"  --item-ids {args.item_ids}")
+        print(f"  --item-ids {args.item_ids}" + (" \\" if tag is not None else ""))
+        if tag is not None:
+            print(f"  --tag {tag}")
 
 
 if __name__ == "__main__":
