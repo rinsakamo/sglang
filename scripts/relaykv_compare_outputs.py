@@ -387,6 +387,11 @@ def main() -> None:
     report_p.add_argument("--out-json", default=None)
     report_p.add_argument("--out-md", default=None)
 
+    plan_p = sub.add_parser("plan")
+    plan_p.add_argument("--case", default="code_probe_table_small")
+    plan_p.add_argument("--out-dir", default="/tmp/relaykv_compare")
+    plan_p.add_argument("--item-ids", required=True)
+
     args = parser.parse_args()
 
     if args.cmd == "run":
@@ -524,6 +529,20 @@ def main() -> None:
             out_md_path = Path(args.out_md)
             out_md_path.parent.mkdir(parents=True, exist_ok=True)
             out_md_path.write_text(markdown + "\n", encoding="utf-8")
+
+    elif args.cmd == "plan":
+        for item_id in parse_item_ids(args.item_ids):
+            info = recommend_blocks_for_table_item(item_id=item_id)
+            blocks_csv = format_blocks_csv(info["recommended_blocks"])
+            print(f"# item_id={item_id:04d} recommended_blocks={blocks_csv}")
+            for line in make_relaykv_env_exports(info["recommended_blocks"]):
+                print(line)
+            print()
+
+        print("python scripts/relaykv_compare_outputs.py report \\")
+        print(f"  --case {args.case} \\")
+        print(f"  --out-dir {args.out_dir} \\")
+        print(f"  --item-ids {args.item_ids}")
 
 
 if __name__ == "__main__":
