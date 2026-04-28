@@ -14,6 +14,11 @@ import requests
 DEFAULT_URL = "http://127.0.0.1:30000/generate"
 DEFAULT_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEFAULT_BLOCK_SIZE = 256
+EASY_TABLE_ITEM_IDS = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190]
+MEDIUM_TABLE_ITEM_IDS = [
+    100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+    200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
+]
 
 
 def build_prompt(case: str, item_id: int | None = None) -> str:
@@ -73,6 +78,18 @@ def build_prompt(case: str, item_id: int | None = None) -> str:
             + "\nAnswer:"
         )
 
+    if case == "code_probe_table_easy":
+        if item_id is None:
+            item_id = 100
+        text = build_table_text_for_item_ids(EASY_TABLE_ITEM_IDS)
+        return text + f"\n\nReturn only the SECRET_CODE for ITEM_ID={item_id:04d}."
+
+    if case == "code_probe_table_medium":
+        if item_id is None:
+            item_id = 100
+        text = build_medium_table_text()
+        return text + f"\n\nReturn only the SECRET_CODE for ITEM_ID={item_id:04d}."
+
     raise ValueError(f"Unknown case: {case}")
 
 def code_for_item(i: int) -> str:
@@ -87,7 +104,34 @@ def build_table_text(num_items: int = 260) -> str:
     return "\n".join(chunks)
 
 
+def build_table_text_for_item_ids(item_ids: List[int]) -> str:
+    chunks = []
+    for item_id in item_ids:
+        chunks.append(build_table_row("code_probe_table_easy", item_id))
+    return "\n".join(chunks)
+
+
+def build_medium_table_text() -> str:
+    chunks = []
+    for item_id in MEDIUM_TABLE_ITEM_IDS:
+        chunks.append(build_table_row("code_probe_table_medium", item_id))
+    return "\n".join(chunks)
+
+
+def build_table_row(case: str, item_id: int) -> str:
+    code = code_for_item(item_id)
+    if case == "code_probe_table_easy":
+        return f"ITEM_ID={item_id:04d} | SECRET_CODE={code}"
+    if case == "code_probe_table_medium":
+        return (
+            f"ITEM_ID={item_id:04d} | LOOKUP_GROUP=MEDIUM_TABLE | "
+            f"SECRET_CODE={code} | CHECKSUM={item_id + 7:04d}"
+        )
+    return f"ITEM_ID={item_id:04d} | SECRET_CODE={code}"
+
+
 def recommend_blocks_for_table_item(
+    case: str,
     item_id: int,
     model: str = DEFAULT_MODEL,
     block_size: int = DEFAULT_BLOCK_SIZE,
@@ -95,9 +139,19 @@ def recommend_blocks_for_table_item(
 ) -> dict:
     tok = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
 
-    text = build_table_text(num_items=260)
+    if case == "code_probe_table_small":
+        text = build_table_text(num_items=260)
+    elif case == "code_probe_table_easy":
+        text = build_table_text_for_item_ids(EASY_TABLE_ITEM_IDS)
+    elif case == "code_probe_table_medium":
+        text = build_medium_table_text()
+    else:
+        raise ValueError(
+            "recommend-blocks currently supports code_probe_table_small, code_probe_table_easy, and code_probe_table_medium only"
+        )
+
     code = code_for_item(item_id)
-    needle = f"ITEM_ID={item_id:04d} | SECRET_CODE={code}"
+    needle = build_table_row(case, item_id)
 
     char_pos = text.index(needle)
     token_start = len(tok.encode(text[:char_pos], add_special_tokens=False))
@@ -387,6 +441,33 @@ def format_report_summary_markdown(summary: Dict[str, Any]) -> str:
     ]
     return "\n".join(lines)
 
+
+def format_baseline_scan_markdown(items: List[Dict[str, Any]]) -> str:
+    headers = [
+        "item_id",
+        "expected_code",
+        "off_first_code",
+        "off_matches_expected",
+        "path",
+        "error",
+    ]
+
+    def fmt(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
+
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+
+    for item in items:
+        row = [fmt(item.get(header)).replace("|", "\\|") for header in headers]
+        lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(lines)
+
 def compare_outputs(off_path: Path, on_path: Path) -> None:
     off = load_json(off_path)
     on = load_json(on_path)
@@ -444,6 +525,8 @@ def main() -> None:
             "code_probe_retrieval",
             "code_probe_retrieval_small",
             "code_probe_table_small",
+            "code_probe_table_easy",
+            "code_probe_table_medium",
         ],
     )
     run_p.add_argument("--url", default=DEFAULT_URL)
@@ -478,6 +561,13 @@ def main() -> None:
     report_p.add_argument("--out-json", default=None)
     report_p.add_argument("--out-md", default=None)
 
+    baseline_p = sub.add_parser("baseline-scan")
+    baseline_p.add_argument("--case", required=True)
+    baseline_p.add_argument("--out-dir", required=True)
+    baseline_p.add_argument("--item-ids", required=True)
+    baseline_p.add_argument("--out-json", default=None)
+    baseline_p.add_argument("--out-md", default=None)
+
     plan_p = sub.add_parser("plan")
     plan_p.add_argument("--case", default="code_probe_table_small")
     plan_p.add_argument("--out-dir", default="/tmp/relaykv_compare")
@@ -510,10 +600,8 @@ def main() -> None:
         compare_outputs(off_path, on_path)
 
     elif args.cmd == "recommend-blocks":
-        if args.case != "code_probe_table_small":
-            raise ValueError("recommend-blocks currently supports code_probe_table_small only")
-
         info = recommend_blocks_for_table_item(
+            case=args.case,
             item_id=args.item_id,
             model=args.model,
             block_size=args.block_size,
@@ -581,6 +669,7 @@ def main() -> None:
                 recommendation_error = None
                 try:
                     info = recommend_blocks_for_table_item(
+                        case=args.case,
                         item_id=item_id,
                     )
                     recommended_blocks = info["recommended_blocks"]
@@ -646,7 +735,7 @@ def main() -> None:
         tag = f"r{args.neighbor_radius}" if args.neighbor_radius > 0 else None
         for item_id_text in [part for part in args.item_ids.split(",") if part]:
             item_id = int(item_id_text)
-            info = recommend_blocks_for_table_item(item_id=item_id)
+            info = recommend_blocks_for_table_item(case=args.case, item_id=item_id)
             blocks_csv = format_blocks_csv(info["recommended_blocks"])
             expanded_blocks = expand_blocks_with_radius(info["recommended_blocks"], args.neighbor_radius)
             expanded_blocks_csv = format_blocks_csv(expanded_blocks)
@@ -674,6 +763,77 @@ def main() -> None:
         print(f"  --item-ids {args.item_ids}" + (" \\" if tag is not None else ""))
         if tag is not None:
             print(f"  --tag {tag}")
+
+    elif args.cmd == "baseline-scan":
+        items = []
+        baseline_correct_item_ids = []
+        out_dir = Path(args.out_dir)
+        for item_id_text in [part for part in args.item_ids.split(",") if part]:
+            item_id = int(item_id_text)
+            off_path = out_dir / f"{args.case}_{item_id_text}_off.json"
+            expected_code = None
+            error = None
+            try:
+                expected_code = recommend_blocks_for_table_item(
+                    case=args.case, item_id=item_id
+                )["expected_code"]
+            except Exception as exc:
+                error = str(exc)
+
+            off_first_code = None
+            off_matches_expected = None
+            try:
+                off = load_json_file(off_path)
+                off_first_code = extract_first_code(off.get("text"))
+                if expected_code is not None:
+                    off_matches_expected = off_first_code == expected_code
+            except Exception as exc:
+                if error is None:
+                    error = str(exc)
+
+            if off_matches_expected is True:
+                baseline_correct_item_ids.append(item_id_text)
+
+            items.append(
+                {
+                    "item_id": item_id_text,
+                    "expected_code": expected_code,
+                    "off_first_code": off_first_code,
+                    "off_matches_expected": off_matches_expected,
+                    "path": str(off_path),
+                    "error": error,
+                }
+            )
+
+        markdown = format_baseline_scan_markdown(items)
+        baseline_correct_line = (
+            "baseline_correct_item_ids: " + ",".join(baseline_correct_item_ids)
+        )
+        print(markdown)
+        print(baseline_correct_line)
+
+        if args.out_json is not None:
+            out_json_path = Path(args.out_json)
+            out_json_path.parent.mkdir(parents=True, exist_ok=True)
+            out_json_path.write_text(
+                json.dumps(
+                    {
+                        "items": items,
+                        "baseline_correct_item_ids": baseline_correct_item_ids,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        if args.out_md is not None:
+            out_md_path = Path(args.out_md)
+            out_md_path.parent.mkdir(parents=True, exist_ok=True)
+            out_md_path.write_text(
+                markdown + "\n" + baseline_correct_line + "\n",
+                encoding="utf-8",
+            )
 
 
 if __name__ == "__main__":
