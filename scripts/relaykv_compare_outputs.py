@@ -227,6 +227,7 @@ def summarize_off_on_pair(
     item_id: int | None = None,
     path: str | None = None,
     recommended_blocks: List[int] | None = None,
+    expected_code: str | None = None,
     error: str | None = None,
 ) -> Dict[str, Any]:
     off_text = off.get("text")
@@ -251,6 +252,9 @@ def summarize_off_on_pair(
         "item_id": item_id,
         "recommended_blocks": recommended_blocks,
         "actual_relaykv_blocks": actual_relaykv_blocks,
+        "expected_code": expected_code,
+        "off_matches_expected": off_code == expected_code if expected_code is not None else None,
+        "on_matches_expected": on_code == expected_code if expected_code is not None else None,
         "same_output_ids": same_output_ids,
         "same_first_code": off_code == on_code,
         "off_first_code": off_code,
@@ -277,6 +281,9 @@ def summarize_compare_result(data: Dict[str, Any], path: Path) -> Dict[str, Any]
         "item_id": item_id,
         "recommended_blocks": recommended_blocks,
         "actual_relaykv_blocks": data.get("actual_relaykv_blocks"),
+        "expected_code": data.get("expected_code"),
+        "off_matches_expected": data.get("off_matches_expected"),
+        "on_matches_expected": data.get("on_matches_expected"),
         "same_output_ids": data.get("same_output_ids"),
         "same_first_code": data.get("same_first_code"),
         "off_first_code": data.get("off_first_code"),
@@ -294,6 +301,9 @@ def format_report_markdown(items: List[Dict[str, Any]]) -> str:
         "item_id",
         "recommended_blocks",
         "actual_relaykv_blocks",
+        "expected_code",
+        "off_matches_expected",
+        "on_matches_expected",
         "same_output_ids",
         "same_first_code",
         "off_first_code",
@@ -320,6 +330,61 @@ def format_report_markdown(items: List[Dict[str, Any]]) -> str:
         row = [fmt(item.get(header)).replace("|", "\\|") for header in headers]
         lines.append("| " + " | ".join(row) + " |")
 
+    return "\n".join(lines)
+
+
+def count_true(items: List[Dict[str, Any]], key: str) -> int:
+    return sum(1 for item in items if item.get(key) is True)
+
+
+def make_report_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total_items = len(items)
+    baseline_correct_items = [item for item in items if item.get("off_matches_expected") is True]
+    baseline_correct_total = len(baseline_correct_items)
+
+    return {
+        "total_items": total_items,
+        "off_matches_expected_true": count_true(items, "off_matches_expected"),
+        "on_matches_expected_true": count_true(items, "on_matches_expected"),
+        "same_first_code_true": count_true(items, "same_first_code"),
+        "same_output_ids_true": count_true(items, "same_output_ids"),
+        "baseline_correct_items": baseline_correct_total,
+        "baseline_correct_on_matches_expected_true": count_true(
+            baseline_correct_items, "on_matches_expected"
+        ),
+        "baseline_correct_same_first_code_true": count_true(
+            baseline_correct_items, "same_first_code"
+        ),
+        "baseline_correct_same_output_ids_true": count_true(
+            baseline_correct_items, "same_output_ids"
+        ),
+    }
+
+
+def format_report_summary_markdown(summary: Dict[str, Any]) -> str:
+    total_items = summary["total_items"]
+    baseline_correct_items = summary["baseline_correct_items"]
+    lines = [
+        "",
+        f"summary: total_items={total_items}",
+        f"off_matches_expected: {summary['off_matches_expected_true']}/{total_items}",
+        f"on_matches_expected: {summary['on_matches_expected_true']}/{total_items}",
+        f"same_first_code: {summary['same_first_code_true']}/{total_items}",
+        f"same_output_ids: {summary['same_output_ids_true']}/{total_items}",
+        f"baseline_correct_items: {baseline_correct_items}",
+        (
+            "baseline_correct_on_matches_expected: "
+            f"{summary['baseline_correct_on_matches_expected_true']}/{baseline_correct_items}"
+        ),
+        (
+            "baseline_correct_same_first_code: "
+            f"{summary['baseline_correct_same_first_code_true']}/{baseline_correct_items}"
+        ),
+        (
+            "baseline_correct_same_output_ids: "
+            f"{summary['baseline_correct_same_output_ids_true']}/{baseline_correct_items}"
+        ),
+    ]
     return "\n".join(lines)
 
 def compare_outputs(off_path: Path, on_path: Path) -> None:
@@ -512,11 +577,14 @@ def main() -> None:
                 on_tag_suffix = f"_{args.tag}" if args.tag is not None else ""
                 on_path = out_dir / f"{args.case}{suffix}_on{on_tag_suffix}.json"
                 recommended_blocks = None
+                expected_code = None
                 recommendation_error = None
                 try:
-                    recommended_blocks = recommend_blocks_for_table_item(
+                    info = recommend_blocks_for_table_item(
                         item_id=item_id,
-                    )["recommended_blocks"]
+                    )
+                    recommended_blocks = info["recommended_blocks"]
+                    expected_code = info["expected_code"]
                 except Exception as exc:
                     recommendation_error = str(exc)
                 try:
@@ -529,6 +597,7 @@ def main() -> None:
                             item_id=item_id,
                             path=f"{off_path},{on_path}",
                             recommended_blocks=recommended_blocks,
+                            expected_code=expected_code,
                             error=recommendation_error,
                         )
                     )
@@ -539,6 +608,9 @@ def main() -> None:
                             "item_id": item_id,
                             "recommended_blocks": recommended_blocks,
                             "actual_relaykv_blocks": None,
+                            "expected_code": expected_code,
+                            "off_matches_expected": None,
+                            "on_matches_expected": None,
                             "same_output_ids": None,
                             "same_first_code": None,
                             "off_first_code": None,
@@ -553,14 +625,15 @@ def main() -> None:
         if not items:
             raise ValueError("report requires --inputs or (--case, --out-dir, and --item-ids)")
 
-        markdown = format_report_markdown(items)
+        summary = make_report_summary(items)
+        markdown = format_report_markdown(items) + format_report_summary_markdown(summary)
         print(markdown)
 
         if args.out_json is not None:
             out_json_path = Path(args.out_json)
             out_json_path.parent.mkdir(parents=True, exist_ok=True)
             out_json_path.write_text(
-                json.dumps({"items": items}, ensure_ascii=False, indent=2),
+                json.dumps({"items": items, "summary": summary}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 
