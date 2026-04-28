@@ -71,7 +71,7 @@ if [[ "$MODE" == "off" ]]; then
   unset RELAYKV_V0_APPLY
   unset RELAYKV_V0_RETRIEVAL_BLOCKS
 else
-  export RELAYKV_V0_APPLY=1
+  export RELAYKV_V0_APPLY=true
   export RELAYKV_V0_RETRIEVAL_BLOCKS="$BLOCKS"
 fi
 
@@ -82,9 +82,15 @@ echo "port: $PORT"
 echo "backend: $BACKEND"
 echo "RELAYKV_V0_APPLY: ${RELAYKV_V0_APPLY-}"
 echo "RELAYKV_V0_RETRIEVAL_BLOCKS: ${RELAYKV_V0_RETRIEVAL_BLOCKS-}"
+echo "command: python -m sglang.launch_server --model-path $MODEL --host $HOST --port $PORT --attention-backend $BACKEND --trust-remote-code --sampling-backend pytorch --disable-cuda-graph --disable-piecewise-cuda-graph --disable-overlap-schedule"
 
 exec python -m sglang.launch_server \
   --model-path "$MODEL" \
   --host "$HOST" \
   --port "$PORT" \
-  --attention-backend "$BACKEND"
+  --attention-backend "$BACKEND" \
+  --trust-remote-code \
+  --sampling-backend pytorch \
+  --disable-cuda-graph \
+  --disable-piecewise-cuda-graph \
+  --disable-overlap-schedule
