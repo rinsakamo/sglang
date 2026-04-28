@@ -19,6 +19,7 @@ MEDIUM_TABLE_ITEM_IDS = [
     100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
     200, 210, 220, 230, 240, 250, 260, 270, 280, 290,
 ]
+MEDIUM_SPREAD_TABLE_ITEM_IDS = [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210]
 
 
 def build_prompt(case: str, item_id: int | None = None) -> str:
@@ -90,6 +91,12 @@ def build_prompt(case: str, item_id: int | None = None) -> str:
         text = build_medium_table_text()
         return text + f"\n\nReturn only the SECRET_CODE for ITEM_ID={item_id:04d}."
 
+    if case == "code_probe_table_medium_spread":
+        if item_id is None:
+            item_id = 100
+        text = build_medium_spread_table_text()
+        return text + f"\n\nReturn only the SECRET_CODE for ITEM_ID={item_id:04d}."
+
     raise ValueError(f"Unknown case: {case}")
 
 def code_for_item(i: int) -> str:
@@ -118,6 +125,15 @@ def build_medium_table_text() -> str:
     return "\n".join(chunks)
 
 
+def build_medium_spread_table_text() -> str:
+    chunks = []
+    filler = " ".join(["SCAN_PAD"] * 80)
+    for item_id in MEDIUM_SPREAD_TABLE_ITEM_IDS:
+        chunks.append(build_table_row("code_probe_table_medium_spread", item_id))
+        chunks.append(f"CONTEXT_PAD ITEM_ID={item_id:04d} {filler}")
+    return "\n".join(chunks)
+
+
 def build_table_row(case: str, item_id: int) -> str:
     code = code_for_item(item_id)
     if case == "code_probe_table_easy":
@@ -126,6 +142,11 @@ def build_table_row(case: str, item_id: int) -> str:
         return (
             f"ITEM_ID={item_id:04d} | LOOKUP_GROUP=MEDIUM_TABLE | "
             f"SECRET_CODE={code} | CHECKSUM={item_id + 7:04d}"
+        )
+    if case == "code_probe_table_medium_spread":
+        return (
+            f"ITEM_ID={item_id:04d} | LOOKUP_GROUP=MEDIUM_SPREAD | "
+            f"SECRET_CODE={code} | CHECKSUM={item_id + 17:04d}"
         )
     return f"ITEM_ID={item_id:04d} | SECRET_CODE={code}"
 
@@ -145,9 +166,11 @@ def recommend_blocks_for_table_item(
         text = build_table_text_for_item_ids(EASY_TABLE_ITEM_IDS)
     elif case == "code_probe_table_medium":
         text = build_medium_table_text()
+    elif case == "code_probe_table_medium_spread":
+        text = build_medium_spread_table_text()
     else:
         raise ValueError(
-            "recommend-blocks currently supports code_probe_table_small, code_probe_table_easy, and code_probe_table_medium only"
+            "recommend-blocks currently supports code_probe_table_small, code_probe_table_easy, code_probe_table_medium, and code_probe_table_medium_spread only"
         )
 
     code = code_for_item(item_id)
@@ -527,6 +550,7 @@ def main() -> None:
             "code_probe_table_small",
             "code_probe_table_easy",
             "code_probe_table_medium",
+            "code_probe_table_medium_spread",
         ],
     )
     run_p.add_argument("--url", default=DEFAULT_URL)
